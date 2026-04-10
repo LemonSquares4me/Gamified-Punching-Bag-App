@@ -523,7 +523,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
       // Clear old results and scan for 5 seconds
       setState(() => _scanResults.clear());
       await FlutterBluePlus.startScan(
-        withServices: [Guid("12345678-1234-5678-1234-56789abcdef0")], // Replace with your MCU's Service UUID
+        withServices: [Guid("4ae6f2be-e303-4a3a-9343-14f9338f1dc8")], //Adriano chosen UUID
         timeout: const Duration(seconds: 5)
       );
     }
