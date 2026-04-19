@@ -7,6 +7,8 @@ import 'dart:typed_data'; //Required for parsing bytes
 import 'package:fl_chart/fl_chart.dart'; // NEW IMPORT
 
 final ValueNotifier<double> liveForceNotifier = ValueNotifier<double>(0.0); //BLE broadcast channel
+//final ValueNotifier<int> liveReactionTimeNotifier = ValueNotifier(0);
+//final ValueNotifier<int> liveScoreNotifier = ValueNotifier(0);
 final ValueNotifier<List<PunchRecord>> sessionHistoryNotifier = ValueNotifier<List<PunchRecord>>([]); // Global pipe for the session history list
 
 // --- UPDATED: Theme Definitions ---
@@ -398,6 +400,7 @@ class GaugePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height);
     final radius = size.width / 2;
+
     
     // Background Arc (Now uses the dynamic arcBackgroundColor)
     final bgPaint = Paint()
@@ -405,6 +408,10 @@ class GaugePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 20
       ..strokeCap = StrokeCap.round;
+
+    // NEW: Clamp the values so the gauge never draws past 100% (pi)
+    double safeCurrentValue = min(currentValue, maxValue);
+    double sweepAngle = (safeCurrentValue / maxValue) * 3.14159;
 
     canvas.drawArc(Rect.fromCircle(center: center, radius: radius), 3.14159, 3.14159, false, bgPaint);
 
@@ -417,11 +424,12 @@ class GaugePainter extends CustomPainter {
       ..strokeWidth = 20
       ..strokeCap = StrokeCap.round;
 
-    double sweepAngle = (currentValue / maxValue) * 3.14159;
     canvas.drawArc(Rect.fromCircle(center: center, radius: radius), 3.14159, sweepAngle, false, activePaint);
 
     // Draw the Max Hold Marker (Now uses the theme's primary accent color)
     if (maxRecordedValue > 0) {
+      // NEW: Clamp the max marker as well
+      double safeMaxValue = min(maxRecordedValue, maxValue);
       double maxSweepAngle = (maxRecordedValue / maxValue) * 3.14159;
       double maxAngle = 3.14159 + maxSweepAngle;
 
@@ -534,11 +542,29 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
     // 1. Stop scanning once a device is selected to save battery
     await FlutterBluePlus.stopScan();
 
+    // --- UI FEEDBACK (Connecting) ---
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Connecting to ${device.platformName.isNotEmpty ? device.platformName : "Device"}...'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+
     try {
       // 2. Establish the connection
-      // Setting autoConnect to false makes the initial connection faster
       await device.connect(autoConnect: false);
       print("Successfully connected to ${device.platformName}");
+
+      // --- UI FEEDBACK (Success) ---
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Successfully Connected!'),
+            backgroundColor: Colors.green.shade700,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
 
       // 3. Discover what Services the MCU is broadcasting
       List<BluetoothService> services = await device.discoverServices();
@@ -563,12 +589,12 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
             characteristic.onValueReceived.listen((List<int> value) {
               print("Incoming MCU Bytes: $value");
               
-              // Ensure we received at least 2 bytes (a 16-bit integer)
+              // --- REVERTED: Ensure we received at least 2 bytes (Force) ---
               if (value.length >= 2) {
                 // Convert the raw byte list into a ByteData object
                 ByteData byteData = ByteData.view(Uint8List.fromList(value).buffer);
                 
-                // Parse the 16-bit integer using Little Endian (Standard for BLE/Arduino)
+                // Parse the 16-bit integer using Little Endian
                 int parsedForce = byteData.getUint16(0, Endian.little);
                 
                 print("Parsed Force: $parsedForce lbs");
@@ -582,6 +608,16 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
       }
     } catch (e) {
       print("Connection failed or was disconnected: $e");
+      
+      // --- UI FEEDBACK (Failed) ---
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection failed: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
     }
   }
 
