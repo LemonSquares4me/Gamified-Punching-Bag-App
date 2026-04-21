@@ -7,8 +7,8 @@ import 'dart:typed_data'; //Required for parsing bytes
 import 'package:fl_chart/fl_chart.dart'; // NEW IMPORT
 
 final ValueNotifier<double> liveForceNotifier = ValueNotifier<double>(0.0); //BLE broadcast channel
-//final ValueNotifier<int> liveReactionTimeNotifier = ValueNotifier(0);
-//final ValueNotifier<int> liveScoreNotifier = ValueNotifier(0);
+final ValueNotifier<int> liveReactionTimeNotifier = ValueNotifier(0);
+final ValueNotifier<int> liveScoreNotifier = ValueNotifier(0);
 final ValueNotifier<List<PunchRecord>> sessionHistoryNotifier = ValueNotifier<List<PunchRecord>>([]); // Global pipe for the session history list
 
 // --- UPDATED: Theme Definitions ---
@@ -166,11 +166,13 @@ class MainNavigation extends StatefulWidget {
 class _MainNavigationState extends State<MainNavigation> {
   int _selectedIndex = 0;
 
+  // 1. Add PerformanceScreen to your IndexedStack list
   static const List<Widget> _widgetOptions = <Widget>[
-    DashboardScreen(),
-    BluetoothScreen(),
-    SessionLogScreen(),
-    SettingsScreen(),      // Index 3 
+    DashboardScreen(),     // Index 0
+    PerformanceScreen(),   // Index 1 (NEW TAB)
+    BluetoothScreen(),     // Index 2
+    SessionLogScreen(),    // Index 3
+    SettingsScreen(),      // Index 4
   ];
 
   void _onItemTapped(int index) {
@@ -195,9 +197,10 @@ class _MainNavigationState extends State<MainNavigation> {
       bottomNavigationBar: BottomNavigationBar(
         items: const <BottomNavigationBarItem>[
           BottomNavigationBarItem(icon: Icon(Icons.speed), label: 'Dashboard'),
+          BottomNavigationBarItem(icon: Icon(Icons.analytics), label: 'Metrics'), // NEW TAB
           BottomNavigationBarItem(icon: Icon(Icons.bluetooth), label: 'Connect'),
           BottomNavigationBarItem(icon: Icon(Icons.history), label: 'History'),
-          BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'), // NEW
+          BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'), 
         ],
         currentIndex: _selectedIndex,
         type: BottomNavigationBarType.fixed, // Required when you have 4 or more items
@@ -484,6 +487,8 @@ class BluetoothScreen extends StatefulWidget {
 class _BluetoothScreenState extends State<BluetoothScreen> {
   List<ScanResult> _scanResults = [];
   bool _isScanning = false;
+  // NEW: Track the currently connected device
+  BluetoothDevice? _connectedDevice;
   late StreamSubscription<List<ScanResult>> _scanResultsSubscription;
   late StreamSubscription<bool> _isScanningSubscription;
 
@@ -555,6 +560,11 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
       await device.connect(autoConnect: false);
       print("Successfully connected to ${device.platformName}");
 
+      // --- NEW: Tell the UI which device we just connected to ---
+      setState(() {
+        _connectedDevice = device;
+      });
+
       // --- UI FEEDBACK (Success) ---
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -571,13 +581,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
 
       // 4. Search through the services to find your data characteristic
       for (BluetoothService service in services) {
-        
-        // (Note: filter by specific custom Service UUID)
-        
         for (BluetoothCharacteristic characteristic in service.characteristics) {
-          
-          // (Note: filter by specific Characteristic UUID)
-
           // 5. Check if this characteristic supports "Notify" (sending live updates)
           if (characteristic.properties.notify) {
             
@@ -587,20 +591,19 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
             
             // 6. Listen for incoming data packets from the MCU
             characteristic.onValueReceived.listen((List<int> value) {
-              print("Incoming MCU Bytes: $value");
-              
-              // --- REVERTED: Ensure we received at least 2 bytes (Force) ---
-              if (value.length >= 2) {
-                // Convert the raw byte list into a ByteData object
+              // Ensure we received the full 6-byte packet
+              if (value.length >= 6) {
                 ByteData byteData = ByteData.view(Uint8List.fromList(value).buffer);
                 
-                // Parse the 16-bit integer using Little Endian
+                // Parse the data in the exact order the ESP team specified
                 int parsedForce = byteData.getUint16(0, Endian.little);
+                int parsedReactionTime = byteData.getUint16(2, Endian.little);
+                int parsedScore = byteData.getUint16(4, Endian.little);
                 
-                print("Parsed Force: $parsedForce lbs");
-                
-                // Broadcast the new force to the rest of the app!
+                // Broadcast all three values to the UI
                 liveForceNotifier.value = parsedForce.toDouble();
+                liveReactionTimeNotifier.value = parsedReactionTime;
+                liveScoreNotifier.value = parsedScore;
               }
             });
           }
@@ -665,9 +668,27 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
                         leading: const Icon(Icons.bluetooth_audio, color: Colors.blueAccent),
                         title: Text(deviceName, style: const TextStyle(fontWeight: FontWeight.bold)),
                         subtitle: Text(device.remoteId.str), // This is the MAC address
-                        trailing: ElevatedButton(
-                          onPressed: () => _connectToDevice(device),
-                          child: const Text("CONNECT"),
+                        trailing: Builder(
+                          builder: (context) {
+                            // Check if this specific row is the connected device
+                            bool isConnected = _connectedDevice?.remoteId == device.remoteId;
+
+                            return ElevatedButton(
+                              // If already connected, disable the button (null) so they don't tap it twice
+                              onPressed: isConnected ? null : () => _connectToDevice(device),
+                              style: ElevatedButton.styleFrom(
+                                // Turn green if connected, otherwise use the standard blue
+                                backgroundColor: isConnected ? Colors.green.shade700 : Colors.blueAccent,
+                                foregroundColor: Colors.white,
+                                disabledBackgroundColor: Colors.green.shade900, // Darker green when disabled
+                                disabledForegroundColor: Colors.white,
+                              ),
+                              child: Text(
+                                isConnected ? "CONNECTED" : "CONNECT",
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            );
+                          }
                         ),
                       ),
                     );
@@ -815,6 +836,77 @@ class SettingsScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class PerformanceScreen extends StatelessWidget {
+  const PerformanceScreen({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primaryColor = theme.colorScheme.primary;
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          "COMBAT METRICS", 
+          style: TextStyle(letterSpacing: 1.5, fontWeight: FontWeight.bold, color: primaryColor)
+        ),
+        const SizedBox(height: 40),
+        
+        // --- Reaction Time Display ---
+        ValueListenableBuilder<int>(
+          valueListenable: liveReactionTimeNotifier,
+          builder: (context, reactionTime, child) {
+            return Card(
+              margin: const EdgeInsets.symmetric(horizontal: 40),
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  children: [
+                    Icon(Icons.timer_outlined, size: 40, color: theme.textTheme.bodyMedium?.color),
+                    const SizedBox(height: 10),
+                    const Text("REACTION TIME", style: TextStyle(color: Colors.grey, fontSize: 14)),
+                    Text(
+                      "$reactionTime ms", 
+                      style: TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: theme.textTheme.bodyLarge?.color),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+        
+        const SizedBox(height: 30),
+
+        // --- Total Score Display ---
+        ValueListenableBuilder<int>(
+          valueListenable: liveScoreNotifier,
+          builder: (context, score, child) {
+            return Card(
+              margin: const EdgeInsets.symmetric(horizontal: 40),
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  children: [
+                    const Icon(Icons.emoji_events_outlined, size: 40, color: Colors.amber),
+                    const SizedBox(height: 10),
+                    const Text("TOTAL SCORE", style: TextStyle(color: Colors.grey, fontSize: 14)),
+                    Text(
+                      "$score", 
+                      style: TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: primaryColor),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ],
     );
   }
 }
