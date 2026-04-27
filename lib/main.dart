@@ -8,7 +8,9 @@ import 'package:fl_chart/fl_chart.dart'; // NEW IMPORT
 
 final ValueNotifier<double> liveForceNotifier = ValueNotifier<double>(0.0); //BLE broadcast channel
 final ValueNotifier<int> liveReactionTimeNotifier = ValueNotifier(0);
-final ValueNotifier<int> liveScoreNotifier = ValueNotifier(0);
+final ValueNotifier<int> averageReactionTimeNotifier = ValueNotifier(0); // NEW
+final ValueNotifier<int> liveScoreNotifier = ValueNotifier(0); // This is now "Current Score"
+final ValueNotifier<int> totalScoreNotifier = ValueNotifier(0); // NEW
 final ValueNotifier<List<PunchRecord>> sessionHistoryNotifier = ValueNotifier<List<PunchRecord>>([]); // Global pipe for the session history list
 
 // --- UPDATED: Theme Definitions ---
@@ -300,7 +302,19 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   }
   // NEW: Reset the session
   void _resetSession() {
+    // 1. Clear the global history list
     sessionHistoryNotifier.value = [];
+
+    // 2. Reset the Force gauge stream back to zero
+    liveForceNotifier.value = 0.0;
+
+    // 3. Reset all the new Combat Metrics back to zero
+    liveReactionTimeNotifier.value = 0;
+    averageReactionTimeNotifier.value = 0;
+    liveScoreNotifier.value = 0;
+    totalScoreNotifier.value = 0;
+
+    // 4. Preserve your custom gauge animation and local UI state
     setState(() {
       _maxRecordedForce = 0.0;
       _targetForce = 0.0;
@@ -308,6 +322,8 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
         CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
       );
     });
+    
+    // Trigger the smooth animation back to zero
     _controller.forward(from: 0.0);
   }
 
@@ -599,7 +615,6 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
             
             // 6. Listen for incoming data packets from the MCU
             characteristic.onValueReceived.listen((List<int> value) {
-              // Ensure we received the full 6-byte packet
               if (value.length >= 6) {
                 ByteData byteData = ByteData.view(Uint8List.fromList(value).buffer);
                 
@@ -607,21 +622,31 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
                 int parsedReactionTime = byteData.getUint16(2, Endian.little);
                 int parsedScore = byteData.getUint16(4, Endian.little);
                 
-                // 1. Broadcast to the live dashboard/gauges
+                // 1. Broadcast the CURRENT values
                 liveForceNotifier.value = parsedForce.toDouble();
                 liveReactionTimeNotifier.value = parsedReactionTime;
                 liveScoreNotifier.value = parsedScore;
 
-                // 2. ---> THE FIX: ADD TO HISTORY LIST <---
-                // Grab the current list, insert the real data at the top, and update the notifier
+                // 2. Add to the running TOTAL Score
+                totalScoreNotifier.value += parsedScore;
+
+                // 3. Update the History Graph List
                 final currentHistory = List<PunchRecord>.from(sessionHistoryNotifier.value);
                 currentHistory.insert(0, PunchRecord(
                   force: parsedForce.toDouble(),
                   time: DateTime.now(),
                   reactionTime: parsedReactionTime,
-                  score: parsedScore,
+                  score: parsedScore, 
                 ));
                 sessionHistoryNotifier.value = currentHistory;
+
+                // 4. Calculate the AVERAGE Reaction Time
+                if (currentHistory.isNotEmpty) {
+                  // Sum up all the reaction times in the history list
+                  int totalRT = currentHistory.fold(0, (sum, item) => sum + item.reactionTime);
+                  // Divide by the number of punches and round to a clean integer
+                  averageReactionTimeNotifier.value = (totalRT / currentHistory.length).round();
+                }
               }
             });
           }
@@ -866,65 +891,102 @@ class PerformanceScreen extends StatelessWidget {
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
 
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text(
-          "COMBAT METRICS", 
-          style: TextStyle(letterSpacing: 1.5, fontWeight: FontWeight.bold, color: primaryColor)
-        ),
-        const SizedBox(height: 40),
-        
-        // --- Reaction Time Display ---
-        ValueListenableBuilder<int>(
-          valueListenable: liveReactionTimeNotifier,
-          builder: (context, reactionTime, child) {
-            return Card(
-              margin: const EdgeInsets.symmetric(horizontal: 40),
-              child: Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  children: [
-                    Icon(Icons.timer_outlined, size: 40, color: theme.textTheme.bodyMedium?.color),
-                    const SizedBox(height: 10),
-                    const Text("REACTION TIME", style: TextStyle(color: Colors.grey, fontSize: 14)),
-                    Text(
-                      "$reactionTime ms", 
-                      style: TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: theme.textTheme.bodyLarge?.color),
-                    ),
-                  ],
-                ),
+    // AnimatedBuilder + Listenable.merge lets us update the UI when ANY of these 4 variables change
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        liveReactionTimeNotifier,
+        averageReactionTimeNotifier,
+        liveScoreNotifier,
+        totalScoreNotifier,
+      ]),
+      builder: (context, child) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                "COMBAT METRICS", 
+                style: TextStyle(letterSpacing: 1.5, fontWeight: FontWeight.bold, color: primaryColor)
               ),
-            );
-          },
-        ),
-        
-        const SizedBox(height: 30),
+              const SizedBox(height: 30),
+              
+              // --- ROW 1: Reaction Times ---
+              Row(
+                children: [
+                  _buildMetricCard(
+                    context,
+                    title: "CURRENT REACTION",
+                    value: "${liveReactionTimeNotifier.value}",
+                    unit: " ms",
+                    icon: Icons.timer_outlined,
+                    iconColor: theme.textTheme.bodyMedium?.color ?? Colors.white,
+                  ),
+                  _buildMetricCard(
+                    context,
+                    title: "AVG REACTION",
+                    value: "${averageReactionTimeNotifier.value}",
+                    unit: " ms",
+                    icon: Icons.speed,
+                    iconColor: Colors.blueAccent,
+                  ),
+                ],
+              ),
+              
+              const SizedBox(height: 10),
 
-        // --- Total Score Display ---
-        ValueListenableBuilder<int>(
-          valueListenable: liveScoreNotifier,
-          builder: (context, score, child) {
-            return Card(
-              margin: const EdgeInsets.symmetric(horizontal: 40),
-              child: Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  children: [
-                    const Icon(Icons.emoji_events_outlined, size: 40, color: Colors.amber),
-                    const SizedBox(height: 10),
-                    const Text("TOTAL SCORE", style: TextStyle(color: Colors.grey, fontSize: 14)),
-                    Text(
-                      "$score", 
-                      style: TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: primaryColor),
-                    ),
-                  ],
-                ),
+              // --- ROW 2: Scores ---
+              Row(
+                children: [
+                  _buildMetricCard(
+                    context,
+                    title: "CURRENT SCORE",
+                    value: "${liveScoreNotifier.value}",
+                    icon: Icons.star_border,
+                    iconColor: Colors.orangeAccent,
+                  ),
+                  _buildMetricCard(
+                    context,
+                    title: "TOTAL SCORE",
+                    value: "${totalScoreNotifier.value}",
+                    icon: Icons.emoji_events,
+                    iconColor: Colors.amber,
+                  ),
+                ],
               ),
-            );
-          },
+            ],
+          ),
+        );
+      }
+    );
+  }
+
+  // A reusable mini-widget for the 2x2 grid to prevent code duplication
+  Widget _buildMetricCard(BuildContext context, {required String title, required String value, String unit = "", required IconData icon, required Color iconColor}) {
+    return Expanded(
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 8.0),
+          child: Column(
+            children: [
+              Icon(icon, size: 36, color: iconColor),
+              const SizedBox(height: 12),
+              Text(
+                title, 
+                style: const TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.0), 
+                textAlign: TextAlign.center
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "$value$unit", 
+                style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: Theme.of(context).textTheme.bodyLarge?.color),
+              ),
+            ],
+          ),
         ),
-      ],
+      ),
     );
   }
 }
