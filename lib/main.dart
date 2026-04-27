@@ -56,7 +56,15 @@ final ValueNotifier<ThemeData> themeNotifier = ValueNotifier<ThemeData>(modernDa
 class PunchRecord {
   final double force;
   final DateTime time;
-  PunchRecord({required this.force, required this.time});
+  final int reactionTime; // NEW
+  final int score;        // NEW
+
+  PunchRecord({
+    required this.force,
+    required this.time,
+    this.reactionTime = 0, // Default to 0 to prevent breaking existing code
+    this.score = 0,        // Default to 0
+  });
 }
 
 class SessionGraph extends StatelessWidget {
@@ -595,15 +603,25 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
               if (value.length >= 6) {
                 ByteData byteData = ByteData.view(Uint8List.fromList(value).buffer);
                 
-                // Parse the data in the exact order the ESP team specified
                 int parsedForce = byteData.getUint16(0, Endian.little);
                 int parsedReactionTime = byteData.getUint16(2, Endian.little);
                 int parsedScore = byteData.getUint16(4, Endian.little);
                 
-                // Broadcast all three values to the UI
+                // 1. Broadcast to the live dashboard/gauges
                 liveForceNotifier.value = parsedForce.toDouble();
                 liveReactionTimeNotifier.value = parsedReactionTime;
                 liveScoreNotifier.value = parsedScore;
+
+                // 2. ---> THE FIX: ADD TO HISTORY LIST <---
+                // Grab the current list, insert the real data at the top, and update the notifier
+                final currentHistory = List<PunchRecord>.from(sessionHistoryNotifier.value);
+                currentHistory.insert(0, PunchRecord(
+                  force: parsedForce.toDouble(),
+                  time: DateTime.now(),
+                  reactionTime: parsedReactionTime,
+                  score: parsedScore,
+                ));
+                sessionHistoryNotifier.value = currentHistory;
               }
             });
           }
