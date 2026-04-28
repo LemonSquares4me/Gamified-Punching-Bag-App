@@ -117,7 +117,7 @@ class SessionGraph extends StatelessWidget {
               borderData: FlBorderData(show: true, border: Border.all(color: Colors.grey.shade300)),
               minX: 0,
               minY: 0,
-              maxY: 1000, // Match your gauge max
+              maxY: 600, // Match your gauge max
               
               // The Line itself
               lineBarsData: [
@@ -237,7 +237,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   
   double _targetForce = 0.0;
   double _maxRecordedForce = 0.0; // NEW: Track the highest hit
-  final double _maxForce = 1000.0; 
+  final double _maxForce = 500.0; 
   final Random _random = Random();
 
   @override
@@ -289,7 +289,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   }
 
   void _simulatePunch() {
-    double newForce = 50.0 + _random.nextInt(850);
+    double newForce = 50.0 + _random.nextInt(450);
     
     // 1. Send to the gauge
     liveForceNotifier.value = newForce;
