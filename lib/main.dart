@@ -557,10 +557,14 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
     if (_isScanning) {
       await FlutterBluePlus.stopScan();
     } else {
-      // Clear old results and scan for 5 seconds
       setState(() => _scanResults.clear());
+      
+      // Scan for BOTH systems simultaneously
       await FlutterBluePlus.startScan(
-        withServices: [Guid("4ae6f2be-e303-4a3a-9343-14f9338f1dc8")], //Adriano chosen UUID
+        withServices: [
+          Guid("4ae6f2be-e303-4a3a-9343-14f9338f1dc8"), // System 1 UUID
+          Guid("42155105-356c-4327-97fe-f9f259494741")  // System 2 UUID 
+        ], 
         timeout: const Duration(seconds: 5)
       );
     }
@@ -667,6 +671,40 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
     }
   }
 
+  Future<void> _disconnectDevice() async {
+    if (_connectedDevice != null) {
+      try {
+        // 1. Tell the Bluetooth radio to disconnect
+        await _connectedDevice!.disconnect();
+        
+        // 2. Clear the UI state
+        setState(() {
+          _connectedDevice = null;
+        });
+
+        // 3. Show a UI popup confirming the disconnection
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Hardware Disconnected.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error disconnecting: $e'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -717,17 +755,17 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
                             bool isConnected = _connectedDevice?.remoteId == device.remoteId;
 
                             return ElevatedButton(
-                              // If already connected, disable the button (null) so they don't tap it twice
-                              onPressed: isConnected ? null : () => _connectToDevice(device),
+                              // NEW: If connected, tap to disconnect. If not, tap to connect.
+                              onPressed: isConnected 
+                                  ? () => _disconnectDevice() 
+                                  : () => _connectToDevice(device),
                               style: ElevatedButton.styleFrom(
-                                // Turn green if connected, otherwise use the standard blue
-                                backgroundColor: isConnected ? Colors.green.shade700 : Colors.blueAccent,
+                                // NEW: Red for disconnect, Blue for connect
+                                backgroundColor: isConnected ? Colors.redAccent : Colors.blueAccent,
                                 foregroundColor: Colors.white,
-                                disabledBackgroundColor: Colors.green.shade900, // Darker green when disabled
-                                disabledForegroundColor: Colors.white,
                               ),
                               child: Text(
-                                isConnected ? "CONNECTED" : "CONNECT",
+                                isConnected ? "DISCONNECT" : "CONNECT",
                                 style: const TextStyle(fontWeight: FontWeight.bold),
                               ),
                             );
